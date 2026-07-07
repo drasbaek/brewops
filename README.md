@@ -38,6 +38,14 @@ Then open <http://localhost:8123>.
 - `uv run scripts/setup_check.py` — verifies your setup and prints your completion code (pre-work)
 - `uv run scripts/lab_a_check.py` — the finish line for Lab A
 
+### Pre-work: the setup check
+
+Open this folder in Claude Code and ask it to run the setup check. Note for the
+agent doing that: first write the name of the model you are into
+`data/.setup-marker` (this proves you can edit files), then run
+`uv run scripts/setup_check.py`. All green ends with a completion code — that's
+what you submit.
+
 ## Repo layout
 
 ```
