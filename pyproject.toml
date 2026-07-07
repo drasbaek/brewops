@@ -9,6 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
+start = "brewops.api.main:run"
 ingest = "brewops.ingest.cli:main_entry"
 seed = "brewops.ingest.cli:seed_entry"
 

@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS brew_events (
     machine_id INTEGER NOT NULL REFERENCES machines(id),
     drink_type TEXT NOT NULL REFERENCES drink_types(name),
     timestamp  TEXT NOT NULL,
-    duration_s REAL NOT NULL,
-    temp_c     REAL NOT NULL,
+    duration_s REAL,
+    temp_c     REAL,
     source     TEXT NOT NULL CHECK (source IN ('csv', 'manual'))
 );
 
