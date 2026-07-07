@@ -1,39 +1,37 @@
-"""Lab A finish line: is "Flat White" supported end to end? Run from the repo root:
+"""Lab A finish line: does each machine's health show its "specialty"
+(its most-brewed drink)? Run from the repo root:
 
     uv run scripts/lab_a_check.py
 
-Green means: the API knows the drink, accepts a flat-white brew, and it
-shows up in the stats.
+Green means: /api/machines/{id} now reports each machine's most-brewed drink,
+and it's the right one for every machine — so the query is real, not hardcoded.
+Then open the dashboard and confirm the specialty shows on each machine card.
 """
 
 import json
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
 from pathlib import Path
 
 PORT = 8123
 BASE = f"http://127.0.0.1:{PORT}"
 
+# Fields the health payload already had before this lab — a specialty added by
+# the participant is any *other* value that names a drink.
+BASE_HEALTH_FIELDS = {
+    "id", "name", "floor", "has_telemetry",
+    "brew_count", "last_brew", "last_maintenance", "recent_errors",
+}
+
 
 def get_json(path: str, timeout: float = 3.0):
     with urllib.request.urlopen(BASE + path, timeout=timeout) as resp:
         return json.loads(resp.read())
-
-
-def post_json(path: str, payload: dict, timeout: float = 5.0):
-    req = urllib.request.Request(
-        BASE + path,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.status, json.loads(resp.read())
 
 
 def api_reachable() -> bool:
@@ -62,13 +60,52 @@ def start_app_if_needed() -> subprocess.Popen | None:
     sys.exit(1)
 
 
-def find_flat_white() -> str | None:
-    drinks = get_json("/api/drink-types")
-    for d in drinks:
-        label = (d.get("label") or "").strip().lower()
-        name = (d.get("name") or "").strip().lower()
-        if label == "flat white" or name in ("flat_white", "flat-white", "flatwhite"):
-            return d["name"]
+def expected_specialties(db_path: str) -> dict[int, tuple[str, str]]:
+    """Ground truth from the database: {machine_id: (drink_key, drink_label)}
+    for every machine that has at least one brew. Ties break on drink name so
+    the answer is deterministic."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT b.machine_id, dt.name AS key, dt.label AS label, COUNT(*) AS n
+        FROM brew_events b
+        JOIN drink_types dt ON dt.name = b.drink_type
+        GROUP BY b.machine_id, dt.id
+        """
+    ).fetchall()
+    conn.close()
+    best: dict[int, tuple[int, str, str]] = {}
+    for r in rows:
+        mid = r["machine_id"]
+        cur = best.get(mid)
+        # higher count wins; on a tie the alphabetically-first drink key wins
+        if cur is None or r["n"] > cur[0] or (r["n"] == cur[0] and r["key"] < cur[1]):
+            best[mid] = (r["n"], r["key"], r["label"])
+    return {mid: (key, label) for mid, (_n, key, label) in best.items()}
+
+
+def string_leaves(value) -> list[str]:
+    """Every string found anywhere in a JSON-ish structure."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in string_leaves(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in string_leaves(v)]
+    return []
+
+
+def find_specialty(health: dict, key: str, label: str) -> str | None:
+    """Look for the machine's specialty among fields the participant added.
+    Returns 'label' or 'key' depending on which form they exposed, or None."""
+    added = {k: v for k, v in health.items() if k not in BASE_HEALTH_FIELDS}
+    leaves = [s.strip() for s in string_leaves(added)]
+    if label in leaves:  # the display label, exactly ("Espresso", "Hot water")
+        return "label"
+    lowered = [s.lower() for s in leaves]
+    if label.lower() in lowered or key.lower() in lowered:
+        return "key"  # right drink, but the raw/lowercased key form
     return None
 
 
@@ -76,39 +113,41 @@ def main() -> int:
     if not Path("pyproject.toml").exists():
         print("[FAIL] run this from the repo root (pyproject.toml not found)")
         return 1
+    if not Path("brewops.db").exists():
+        print("[FAIL] brewops.db not found — run `uv run seed` first.")
+        return 1
 
+    expected = expected_specialties("brewops.db")
     proc = start_app_if_needed()
     try:
-        drink = find_flat_white()
-        if drink is None:
-            print("[FAIL] no 'Flat White' in /api/drink-types.")
-            print("       It needs to be a supported drink type — and remember the")
-            print("       database is rebuilt from the drink list by `uv run seed`.")
-            return 1
-        print(f"[OK] drink type present: {drink}")
-
-        timestamp = (datetime.now() - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            status, body = post_json(
-                "/api/brews",
-                {"machine_id": 1, "drink_type": drink, "timestamp": timestamp},
-            )
-        except urllib.error.HTTPError as e:
-            print(f"[FAIL] POST /api/brews with a flat white was rejected ({e.code}):")
-            print(f"       {e.read().decode()[:200]}")
-            return 1
-        print(f"[OK] logged a flat white brew (id {body.get('id')})")
-
-        stats = get_json("/api/stats")
-        counts = {d["name"]: d["count"] for d in stats["per_drink"]}
-        if counts.get(drink, 0) < 1:
-            print("[FAIL] the flat white was accepted but doesn't show up in /api/stats")
-            return 1
-        print(f"[OK] flat white appears in the stats (count: {counts[drink]})")
+        showed_key_only = []
+        for machine_id, (key, label) in sorted(expected.items()):
+            try:
+                health = get_json(f"/api/machines/{machine_id}")
+            except urllib.error.HTTPError as e:
+                print(f"[FAIL] GET /api/machines/{machine_id} failed ({e.code})")
+                return 1
+            form = find_specialty(health, key, label)
+            name = health.get("name", f"machine {machine_id}")
+            if form is None:
+                print(f"[FAIL] {name}: no specialty in the health payload.")
+                print(f"       Expected its most-brewed drink, {label!r}, to appear in")
+                print(f"       /api/machines/{machine_id}. Add it in get_machine_health,")
+                print("       then render it on the machine card in the frontend.")
+                return 1
+            print(f"[OK] {name}: specialty = {label}")
+            if form == "key":
+                showed_key_only.append(name)
 
         print()
-        print("[DONE] Lab A complete! Open http://localhost:8123 and admire your dashboard —")
-        print("       your flat white is in there.")
+        if showed_key_only:
+            print("[TIP] The specialty is correct, but you're exposing the machine key")
+            print(f"      (e.g. 'espresso') rather than the display label ('Espresso') for:")
+            print(f"      {', '.join(showed_key_only)}. Consider showing the label people read.")
+            print()
+        print("[DONE] Lab A complete! Now open http://localhost:8123 and confirm each")
+        print("       machine card shows its Specialty — that's the part the API can't")
+        print("       check for you.")
         return 0
     finally:
         if proc is not None and proc.poll() is None:
