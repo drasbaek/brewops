@@ -1,0 +1,6 @@
+_handoff/
+.venv/
+__pycache__/
+*.pyc
+*.db
+data/.setup-marker
