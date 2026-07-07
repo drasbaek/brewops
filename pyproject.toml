@@ -8,6 +8,10 @@ dependencies = [
     "uvicorn>=0.29",
 ]
 
+[project.scripts]
+ingest = "brewops.ingest.cli:main_entry"
+seed = "brewops.ingest.cli:seed_entry"
+
 [dependency-groups]
 dev = ["pytest>=8.0"]
 
