@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BrewOps</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>BrewOps</h1>
+    <p class="tagline">Office coffee fleet — telemetry &amp; operations</p>
+  </header>
+
+  <main>
+    <!-- Zone 1: dashboard -->
+    <section id="dashboard">
+      <div class="stat-tiles">
+        <div class="tile">
+          <span class="tile-number" id="total-brews">–</span>
+          <span class="tile-label">brews total</span>
+        </div>
+        <div class="tile">
+          <span class="tile-number" id="brews-today">–</span>
+          <span class="tile-label">brews on last active day</span>
+        </div>
+        <div class="tile">
+          <span class="tile-number" id="machine-count">–</span>
+          <span class="tile-label">machines</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Per drink</h2>
+        <div id="drink-bars"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Brews over time</h2>
+        <svg id="timeline" viewBox="0 0 600 130" preserveAspectRatio="none" role="img"
+             aria-label="Brews per day"></svg>
+      </div>
+
+      <div class="panel">
+        <h2>Machines</h2>
+        <div id="machine-cards" class="cards"></div>
+      </div>
+    </section>
+
+    <!-- Zone 2: log a brew (manual entry for machines without telemetry) -->
+    <section class="panel form-panel">
+      <h2>Log a brew</h2>
+      <p class="hint">For machines that don't report their own events — looking at you, Old Faithful.</p>
+      <form id="brew-form">
+        <label for="brew-machine">Machine</label>
+        <select id="brew-machine" required></select>
+
+        <label for="brew-drink">Drink</label>
+        <select id="brew-drink" required></select>
+
+        <label for="brew-timestamp">When</label>
+        <input type="datetime-local" id="brew-timestamp" required>
+
+        <button type="submit" id="brew-submit">Log brew</button>
+        <p id="brew-message" class="message" role="status"></p>
+      </form>
+    </section>
+
+    <!-- Zone 3: log maintenance -->
+    <section class="panel form-panel">
+      <h2>Log maintenance</h2>
+      <form id="maintenance-form">
+        <label for="maintenance-machine">Machine</label>
+        <select id="maintenance-machine" required></select>
+
+        <label for="maintenance-type">Type</label>
+        <select id="maintenance-type" required>
+          <option value="descale">Descale</option>
+          <option value="refill">Refill</option>
+          <option value="repair">Repair</option>
+          <option value="error">Error</option>
+        </select>
+
+        <label for="maintenance-timestamp">When</label>
+        <input type="datetime-local" id="maintenance-timestamp" required>
+
+        <label for="maintenance-note">Note</label>
+        <input type="text" id="maintenance-note" placeholder="optional">
+
+        <button type="submit" id="maintenance-submit">Log maintenance</button>
+        <p id="maintenance-message" class="message" role="status"></p>
+      </form>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
