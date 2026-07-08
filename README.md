@@ -1259,5 +1259,435 @@ CREATE INDEX IF NOT EXISTS idx_maintenance_events_machine ON maintenance_events(
 
 ---
 
+## Appendix E: Extended Architecture Narrative
+
+This appendix restates the architecture in prose, at length, for readers who prefer a continuous
+narrative to diagrams and tables. It is deliberately repetitive of earlier sections; that
+repetition is a feature of a single-source-of-truth document, not a bug. Everything you need to
+understand how a byte of coffee telemetry travels from a machine to a pixel on the dashboard is
+described here in one place, so that no reader ever has to hold two sections in their head at once.
+
+Consider the life of the system from cold start. When you run `uv run start`, the console script
+declared in `pyproject.toml` resolves to `brewops.api.main:run`, which is a thin wrapper around
+`uvicorn.run(app, host="127.0.0.1", port=8123)`. Uvicorn imports the module, which constructs the
+FastAPI application object at import time, wiring up the `lifespan` asynchronous context manager.
+The lifespan manager runs exactly once as the server comes up: it opens a SQLite connection using
+the same `connect()` helper that every request will later use, calls `init_db` on that connection
+to ensure the schema exists and the reference data is present, and then yields control back to
+uvicorn for the lifetime of the process. When the process is asked to shut down, the code after the
+yield would run; in BrewOps there is nothing to clean up there, because connections are per-request
+and short-lived, so the teardown is empty. This is intentional: there is no global connection to
+close, no pool to drain, no background task to cancel.
+
+Once the server is live it does two jobs at once. It answers JSON requests under the `/api` prefix,
+and it serves the static dashboard from every other path. The static serving is accomplished by a
+single `StaticFiles` mount at `/`, configured with `html=True` so that a request for `/` transparently
+returns `index.html`. The mount is added last, after all the JSON routes are registered, which
+matters: FastAPI resolves routes in the order they are added, so the explicit `/api/...` routes take
+precedence and the catch-all static mount only handles what is left over. If you ever add a new JSON
+endpoint, add it before the mount, exactly as the existing endpoints are.
+
+When a JSON request arrives that needs the database — which is nearly all of them — FastAPI resolves
+the `get_db` dependency. That dependency is a generator: it opens a fresh connection, yields it to
+the route handler, and, in its `finally` block, closes it when the handler returns. This gives every
+request its own connection with a clean transactional slate, and guarantees the connection is closed
+even if the handler raises. Because SQLite connections are cheap to open against a local file, and
+because the workload is a handful of office coffee machines rather than a high-traffic service, there
+is no measurable benefit to pooling, and pooling would introduce thread-safety questions that the
+current design sidesteps entirely. The one concession to threading is `check_same_thread=False` on the
+connection, set because uvicorn's worker model may invoke a handler on a different thread than the one
+that created the connection object; since each connection is confined to a single request and never
+shared, this is safe.
+
+The two write paths deserve a second, longer look, because their symmetry and their asymmetry are
+both instructive. The ingest path and the API path both ultimately do the same thing — validate a
+prospective row and, if it passes, insert it into `brew_events` or `maintenance_events`. They enforce
+the same domain rules: the machine must exist, the drink type (for brews) must exist, the maintenance
+type (for maintenance) must be one of the four allowed values, the timestamp must parse and must not
+be in the future. And yet they are implemented as two separate bodies of code, in two separate
+modules, and that duplication is deliberate rather than accidental. The reason is that the two paths
+face fundamentally different clients and therefore have fundamentally different failure semantics. The
+ingest path consumes files that may contain thousands of rows, of which a handful may be malformed;
+the correct behavior there is to load everything that is valid, skip what is not, and hand back a
+precise report of what was skipped and why, so that a human can go fix the source data. The API path,
+by contrast, serves a single human action at a time — a person clicking "log brew" in the dashboard —
+and the correct behavior there is to accept the action or reject it immediately with a clear,
+actionable error, because there is a person waiting for the answer right now. Merging the two paths
+into one shared validator would force one of these two failure models onto the other, and both models
+are correct for their own context. So BrewOps keeps them separate and keeps the *rules* they enforce
+documented in one place (see Section 14) so they cannot silently drift apart.
+
+## Appendix F: A Guided Tour of a Single Brew (the API path)
+
+To make the API path concrete, follow one manual brew from the browser all the way to the database.
+Suppose someone has just pulled an espresso from Old Faithful — the second-floor machine with no
+telemetry — and wants to record it. They open the dashboard, pick "Old Faithful" from the machine
+dropdown, pick "Espresso" from the drink dropdown, choose a time in the datetime picker, and submit.
+
+The browser's `<input type="datetime-local">` produces a value like `2026-07-08T09:41`. Note what is
+and is not present: there is a `T` between the date and the time, and there are no seconds. This is
+the native serialization of that HTML control, and it is the single most important reason the API's
+timestamp parser is lenient. The dashboard's JavaScript packages the form fields into a JSON body and
+issues `POST /api/brews` with a payload shaped like `{"machine_id": 3, "drink_type": "espresso",
+"timestamp": "2026-07-08T09:41", "duration_s": null, "temp_c": null}`. Duration and temperature are
+null because a human recording a brew by hand does not typically have a stopwatch reading or a
+thermometer reading; those fields are optional precisely to accommodate manual entry.
+
+FastAPI receives the request and validates the body against the `BrewIn` Pydantic model. That model
+declares `machine_id` as an integer, `drink_type` as a string, `timestamp` as a string, and both
+`duration_s` and `temp_c` as optional floats defaulting to null. If the JSON is malformed or a field
+has the wrong type, FastAPI rejects the request with its standard 422 response before the handler even
+runs; this is the framework's contribution to validation and it happens for free. Assuming the body is
+well-typed, the `log_brew` handler runs, and the `get_db` dependency hands it a fresh connection.
+
+The handler now performs domain validation in a deliberate order. First it calls
+`queries.get_machine(conn, brew.machine_id)`; if that returns `None`, the machine id is not in the
+fleet, and the handler raises `HTTPException(400, "unknown machine_id 3")` — except of course machine
+3 does exist, so this passes. Next it calls `queries.drink_type_exists(conn, brew.drink_type)`; if the
+drink name is not among the seeded drink types, it raises `HTTPException(400, "unknown drink_type
+'espresso'")` — again this passes, because `espresso` is a seeded drink. Then it calls
+`parse_timestamp(brew.timestamp)`. This is the function that embodies the leniency described at length
+in Section 12: it tries the canonical `%Y-%m-%d %H:%M:%S` format first, fails, tries
+`%Y-%m-%dT%H:%M:%S`, fails again because there are no seconds, tries `%Y-%m-%dT%H:%M`, and succeeds.
+Having parsed the value into a `datetime`, it checks whether that datetime is after `datetime.now()`;
+if it were, the handler would raise `HTTPException(400, "timestamp is in the future")`, but a brew
+logged at 09:41 on a day when it is later than that is safely in the past, so the check passes. The
+function then formats the datetime back out with `%Y-%m-%d %H:%M:%S`, yielding the canonical string
+`2026-07-08 09:41:00` — note the seconds have been materialized as `00` and the `T` has become a
+space. This normalized string, not the original input, is what will be stored.
+
+With all validation passed, the handler calls `queries.insert_brew(conn, 3, "espresso", "2026-07-08
+09:41:00", None, None, source="manual")`. The critical detail is that final `source="manual"`
+argument: every brew that comes through the API is, by definition, logged by a human, so it is always
+recorded with a source of `manual`, never `csv`. The insert runs, SQLite assigns an autoincrement row
+id, and `insert_brew` returns that id via `cur.lastrowid`. The handler calls `conn.commit()` to make
+the write durable, and returns `{"id": <new_id>, "status": "logged"}`. FastAPI serializes that to JSON,
+the `get_db` dependency's `finally` closes the connection, and the dashboard shows a confirmation. The
+whole trip touched the API layer and the database layer, went nowhere near the ingest layer, and left
+exactly one new row in `brew_events` with `source = 'manual'`.
+
+## Appendix G: A Guided Tour of a Single Ingest Run
+
+Now follow the other write path. Suppose the monthly telemetry export for Bertha has just landed as
+`data/inbox/brews_bertha_2026-07.csv`, and you run `uv run ingest` with no arguments. The console
+script resolves to `brewops.ingest.cli:main_entry`, which calls `main(None)`. The `main` function
+builds an `argparse` parser with a single optional positional argument, `path`, defaulting to the
+string `data/inbox`. With no arguments supplied, `path` becomes `data/inbox`. The function checks that
+the path exists; if it did not, it would print `[FAIL] path not found: data/inbox` and return the exit
+code 1. The path does exist, so it opens a connection, calls `init_db` on it to guarantee the schema
+and reference data are present (this is the idempotent, non-destructive initialization — `ingest`
+never drops anything, unlike `seed`), and then calls `ingest_path(conn, Path("data/inbox"))`.
+
+`ingest_path` is where a folder becomes a deterministic sequence of files. Because the argument is a
+directory, it computes `sorted(path.glob("*.csv"))`, which yields every CSV in the inbox in stable
+alphabetical order. Determinism matters here for two reasons: it makes ingest runs reproducible across
+machines and operating systems, and it makes the workshop's expected outputs stable. `ingest_path`
+also establishes the reference `now` — it uses the `now` argument if one was passed (the tests do
+this) or falls back to `datetime.now()`. It then constructs a fresh `IngestReport` and calls
+`ingest_file` for each CSV in turn, threading the same report and the same `now` through every call so
+that the totals accumulate and the future-timestamp check uses a single consistent notion of the
+present.
+
+Inside `ingest_file`, the first task is classification. The function lowercases the filename and
+inspects its prefix. A name beginning with `brews` is a telemetry brew file, so `kind` becomes
+`"brew"` and `source` becomes `"csv"`. A name beginning with `manual` is a paper-log export, so `kind`
+is still `"brew"` but `source` becomes `"manual"` — this is how the exact same brew columns can be
+loaded with the correct provenance depending only on the filename. A name beginning with `maintenance`
+is a maintenance file, so `kind` becomes `"maintenance"` and there is no source column at all. Any
+other filename is unrecognized: the function appends the name to `report.skipped_files` and returns
+immediately without opening the file. For `brews_bertha_2026-07.csv`, the prefix is `brews`, so it is a
+csv-sourced brew file.
+
+Having classified the file, `ingest_file` snapshots the set of known machine ids and the set of known
+drink names by querying the database once, up front, rather than per row. It increments
+`report.files`, opens the file with the `csv.DictReader`, and iterates rows starting the line counter
+at 2, because the header occupied line 1 — this is why rejection line numbers line up with what you
+see in a text editor. For each row it calls `_load_row`, which returns either `None` on success or a
+human-readable rejection reason string on failure. On success, the function increments either
+`brews_loaded` or `maintenance_loaded` depending on the kind. On failure, it appends a
+`(filename, line_number, reason)` tuple to `report.rejected`. After the loop it commits once, so an
+entire file is one transaction.
+
+`_load_row` is the heart of ingest validation and it applies the rules in a careful order so that the
+rejection reason is always the most specific true statement about why the row failed. It first extracts
+and integer-parses `machine_id`, rejecting with `bad machine_id <value>` if the field is not an
+integer, then rejecting with `unknown machine_id <id>` if the integer is not in the known set. It parses
+the timestamp with the strict `_parse_timestamp`, which — unlike the API — accepts only the canonical
+format and additionally rejects future timestamps against the threaded `now`. For a brew row it then
+checks the drink against the known drink names, parses `duration_s` and `temp_c` as floats, and rejects
+non-positive durations, because a brew that took zero or negative seconds is physically impossible and
+signals corrupt data. For a maintenance row it checks the type against the four allowed values. Only
+after every check passes does it execute the parameterized INSERT. When the run finishes, control
+returns up the stack to `main`, which calls `_print_report` to render the totals, the first twenty
+rejections in full, a summarized count of any beyond twenty, and the list of skipped files, and then
+returns exit code 0.
+
+## Appendix H: Module-by-Module Deep Dive
+
+This appendix walks every source module in `src/brewops/` and describes, in prose, what it contains and
+why. It is the most detailed possible restatement of the codebase short of the code itself, and it is
+included so that a reader — or an agent — can understand the entire implementation without leaving this
+document.
+
+**`db/connection.py`.** This is the smallest and most foundational module. It defines a single
+constant, `DEFAULT_DB_FILENAME`, equal to `brewops.db`. It exposes `db_path()`, which returns the
+database file location by consulting the `BREWOPS_DB` environment variable and falling back to the
+default; this indirection is what lets tests point at a throwaway file and what lets an operator run a
+scratch instance against a different database without touching code. It exposes `connect(path=None)`,
+which opens a `sqlite3` connection to either the supplied path or `db_path()`, sets the row factory to
+`sqlite3.Row` so that rows can be accessed by column name and converted to dicts, sets
+`check_same_thread=False` for the uvicorn threading reasons described above, and executes `PRAGMA
+foreign_keys = ON` so that the foreign key constraints declared in the schema are actually enforced at
+runtime — a step that is famously easy to forget with SQLite, whose foreign keys are off by default.
+
+**`db/schema.py`.** This module owns the shape of the database and its reference data. The `SCHEMA`
+constant is a single multi-statement DDL string that creates the four tables and the three indexes, all
+with `IF NOT EXISTS` so the statements are safe to run repeatedly. The `MACHINES` list is the canonical
+fleet: four tuples of id, name, floor, and telemetry flag, with Old Faithful the sole machine whose
+flag is false. The `DRINK_TYPES` list is the canonical drink menu: six tuples of machine-readable name
+and human-readable label. The `init_db(conn)` function executes the schema and then inserts the
+reference data with `INSERT OR IGNORE`, which means running it against an already-populated database is
+a no-op rather than an error — this is what makes it safe to call at every API startup and at the start
+of every ingest. The `reset_db(conn)` function is the destructive counterpart: it drops all four tables
+and then calls `init_db` to recreate them empty-but-seeded, and it exists specifically to back the
+`seed` command's "rebuild from scratch" semantics.
+
+**`db/queries.py`.** This module contains every SQL statement in the entire project; the architectural
+rule is that no SQL is written anywhere else, so that the full surface area of database interaction can
+be understood by reading one file. `get_machines` returns all machines ordered by id, converting the
+integer telemetry flag to a Python boolean on the way out so the JSON is clean. `get_machine` returns a
+single machine by id or `None`. `get_drink_types` returns all drinks ordered by id. `drink_type_exists`
+returns a boolean for whether a drink name is known, and is used by the API's brew validation.
+`insert_brew` and `insert_maintenance` are the two write functions; each runs a parameterized INSERT and
+returns the new row id. `get_stats` computes the dashboard's three numbers: the total brew count, a
+per-drink breakdown produced by a LEFT JOIN from `drink_types` so that even drinks with zero brews
+appear with a count of zero, and a per-day time series grouped by `DATE(timestamp)`. `get_machine_health`
+assembles a single machine's card: the machine row itself, plus a brew count and last-brew timestamp,
+plus the single most recent non-error maintenance event, plus up to five most recent error events. The
+deliberate separation of "last maintenance" from "recent errors" reflects the product distinction
+between routine upkeep and alarming failures.
+
+**`ingest/loader.py`.** This module is the ingest engine, described narratively in Appendix G. Beyond
+the functions covered there, it declares the module-level constants that codify the file contract: the
+`TIMESTAMP_FORMAT`, the set of valid `MAINTENANCE_TYPES`, and the expected `BREW_COLUMNS` and
+`MAINTENANCE_COLUMNS`. It defines the `IngestReport` dataclass, whose fields accumulate the outcome of a
+run. And it defines the private helpers `_parse_timestamp`, `_known_machines`, `_known_drinks`, and
+`_load_row`, plus the public `ingest_file` and `ingest_path`. The public functions are the ones the CLI
+and the tests call; the private ones are the implementation.
+
+**`ingest/cli.py`.** This module defines the two console-script entry points and their shared reporting.
+`main` parses arguments and runs an additive ingest. `seed` runs a destructive reset followed by an
+ingest of the default inbox, and prints a final `[OK] database seeded.` line on success.
+`_print_report` is the shared pretty-printer. `main_entry` and `seed_entry` are the tiny wrappers named
+in `pyproject.toml` that call `sys.exit` with the integer return codes, so that the shell sees a proper
+exit status.
+
+**`api/main.py`.** This module is the API layer, described narratively in Appendix F. It defines the
+host and port constants, the tuple of accepted timestamp formats, the `lifespan` manager, the FastAPI
+`app`, the `get_db` dependency, the `parse_timestamp` helper, the `BrewIn` and `MaintenanceIn` request
+models, the six route handlers, and the `StaticFiles` mount, and finally the `run` function that starts
+uvicorn. It is the one module that imports from every other part of the package, because it is the
+composition root where the database layer and the frontend are wired together behind HTTP.
+
+**`frontend/`.** The three static files are not Python and contain no server logic. `index.html` is the
+markup skeleton of the dashboard. `app.js` fetches the read endpoints, renders the stats and the machine
+cards, and wires the manual-entry forms to the write endpoints. `style.css` styles all of it. There is
+no build step, no framework, and no state library; the files are served verbatim.
+
+## Appendix I: Extended Data Dictionary
+
+Every column in the database, restated with extended commentary, so that the meaning and the intent of
+each field is unambiguous. This duplicates the tables in Section 10 on purpose.
+
+In `machines`, `id` is a small integer primary key that every event references; it is stable and should
+never be reused. `name` is the human-facing machine name including its location in parentheses, and it
+carries a UNIQUE constraint so two machines cannot share a name. `floor` is the integer floor number,
+used for grouping and display. `has_telemetry` is an integer boolean, one for machines that emit CSVs
+and zero for Old Faithful; the application converts it to a real boolean on the way out.
+
+In `drink_types`, `id` is the primary key and the ordering key for display. `name` is the stable
+machine key used in every brew event and every API request, and carries a UNIQUE constraint. `label` is
+the display string; it may be changed freely without touching historical data because no event stores
+the label, only the name.
+
+In `brew_events`, `id` is the autoincrement primary key. `machine_id` is a foreign key into `machines`
+and may not reference a nonexistent machine. `drink_type` is a foreign key into `drink_types.name` and
+may not reference an unknown drink. `timestamp` is the canonical naive-local-time string. `duration_s`
+is a nullable real giving the number of seconds the brew took, always positive when present. `temp_c`
+is a nullable real giving the brew temperature in Celsius. `source` is a non-null string constrained to
+exactly `csv` or `manual` by a CHECK constraint, recording whether telemetry or a human produced the
+row.
+
+In `maintenance_events`, `id` is the autoincrement primary key. `machine_id` is a foreign key into
+`machines`. `type` is a non-null string constrained by CHECK to one of `descale`, `refill`, `repair`,
+or `error`. `timestamp` is the canonical naive-local-time string. `note` is nullable free text.
+`error_code` is a nullable short code, conventionally present on rows of type `error` and absent
+otherwise.
+
+## Appendix J: Timestamp Handling — Extended Rationale and Edge Cases
+
+Section 12 gives the authoritative summary of timestamp handling. This appendix adds the long-form
+rationale and the edge cases, because timestamps are the single most common source of confusion in any
+data system and BrewOps would rather over-explain them than leave a gap.
+
+The decision to store naive local time as a fixed-width string rather than as a Unix epoch integer or a
+timezone-aware ISO 8601 value was made consciously and can be defended on several grounds. First, the
+domain is a single office in a single location; there is exactly one relevant wall clock, and expressing
+every timestamp in that clock's local time is both the most human-readable choice and the one least
+likely to be misread by an operator glancing at the database. Second, the fixed-width canonical format
+sorts lexicographically in the same order as it sorts chronologically, which means SQLite can order and
+range-filter timestamps as plain strings with no conversion, and the `DATE()` function can extract the
+day by simply taking the first ten characters. Third, avoiding timezone-aware values sidesteps an entire
+category of bugs — double conversions, ambiguous local times during daylight-saving transitions, and
+the perennial confusion between "the time it happened" and "the time in UTC" — none of which carry any
+benefit in a single-location coffee-tracking application.
+
+The asymmetry between the strict ingest parser and the lenient API parser is the other point worth
+dwelling on. It would be simpler, in a narrow sense, to have one parser shared by both paths. But the
+two paths have different producers and therefore different reasonable expectations. Telemetry files and
+paper-log exports are, or should be, machine-formatted, and holding them to the single canonical format
+means that any deviation is surfaced immediately as a rejection rather than being silently coerced,
+which is exactly what you want when the deviation might indicate a corrupt export or a misconfigured
+exporter upstream. The API, on the other hand, is driven by a browser form whose native datetime control
+emits a `T`-separated value without seconds; rejecting that would mean either forcing the frontend to
+reformat the value before sending it, or annoying the user, when instead the backend can simply accept
+the browser's natural output and normalize it. So the leniency is not sloppiness; it is meeting each
+client where it actually is, while still guaranteeing that everything written to the database is in the
+one canonical form.
+
+As for edge cases: a timestamp exactly equal to `now` is not in the future and is accepted. A timestamp
+one second in the future is rejected. On the API path, `now` is sampled fresh at request time, so two
+requests a minute apart use two different thresholds. On the ingest path, `now` is sampled once per run
+(or injected by a test) and held constant for the whole run, so a long ingest does not shift its own
+threshold midway. Fractional seconds are never accepted on either path, because no accepted format
+includes them; a value like `2026-07-08 09:41:17.5` will fail to parse. Two-digit years, month/day
+transpositions, and slash-separated dates all fail to parse and are rejected with the unparsable-value
+reason. None of these behaviors are accidental; each falls directly out of the small, explicit set of
+accepted formats.
+
+## Appendix K: Operational Runbook
+
+This appendix collects step-by-step procedures for the operational situations that actually arise.
+
+**Standing up a fresh instance.** Clone the repository, run `uv sync` to install dependencies into the
+managed environment, run `uv run seed` to create and populate the database from the sample inbox, and
+run `uv run start` to bring up the server on port 8123. Open the dashboard to confirm the stats and
+machine cards render.
+
+**Loading a new monthly export.** Drop the new CSV into `data/inbox/`, confirm its filename begins with
+`brews`, `manual`, or `maintenance` so it will be recognized, and run `uv run ingest`. Read the printed
+report: confirm the file was processed, note how many rows loaded, and scrutinize any rejections. Because
+`ingest` is additive, running it again on the same file would double-load its rows, so ingest each new
+file exactly once.
+
+**Recovering from a bad load.** If an ingest loaded data you did not want, the simplest recovery is to
+remove or fix the offending file in the inbox and run `uv run seed`, which drops everything and rebuilds
+the database from the current contents of the inbox. This is destructive of any manually logged brews
+that live only in the database and not in a CSV, so export or re-enter those if they matter.
+
+**Diagnosing rejected rows.** Every rejection names the file, the line number (with the header counted
+as line 1), and a specific reason. Open the file, go to that line, and compare it against the column
+contract in Section 13 and the rules in Section 14. The most common causes, in rough order of frequency,
+are timestamps not in the canonical format, unknown drink names, unknown machine ids, and non-positive
+durations.
+
+**Pointing at a scratch database.** Set `BREWOPS_DB` to a throwaway path for any command, for example
+`BREWOPS_DB=/tmp/scratch.db uv run seed` followed by `BREWOPS_DB=/tmp/scratch.db uv run start`, to
+experiment without touching the real `brewops.db`.
+
+## Appendix L: Extended Frequently Asked Questions
+
+**Why is there no login?** Because the app binds to localhost and is a single-user, fictional-coffee
+workshop artifact. Authentication would be pure ceremony here.
+
+**Why SQLite and not Postgres?** Because the dataset is tiny, the app is single-process, and a single
+file is the least-effort thing that fully works. Boring technology is a design principle, not a
+limitation to overcome.
+
+**Why is all the SQL in one file?** So that the entire database surface area can be read in one place.
+If you need a new query, add a function to `queries.py`; do not inline SQL in a route handler or the
+loader.
+
+**Why are duration and temperature optional?** Because manual entries, especially for Old Faithful,
+often lack them. A human recording a brew after the fact rarely has a stopwatch reading. Telemetry rows
+generally do include them.
+
+**Why does `per_drink` include drinks with zero brews?** Because it is a LEFT JOIN from `drink_types`,
+which is deliberate: the dashboard wants to show the full menu, including drinks nobody has ordered
+recently, rather than silently omitting them.
+
+**Why does the machine health card separate last maintenance from recent errors?** Because a routine
+descale and an error code are different things to a person reading the card. Errors are surfaced as a
+short recent list; the last routine maintenance is surfaced as a single most-recent event, explicitly
+excluding error rows.
+
+**Can I change the port?** Yes, by editing the `PORT` constant in `api/main.py`. It is intentionally not
+an environment variable.
+
+**Can I add a machine or a drink?** Yes. Add a row to `MACHINES` or a tuple to `DRINK_TYPES` in
+`schema.py`, then re-seed. There is a dedicated `add-drink-type` skill that automates the drink case end
+to end.
+
+**Why did my future-dated test row get rejected?** Because both write paths refuse timestamps after
+"now". In a test, inject a fixed `now` via the ingest layer's `now` parameter to control the threshold.
+
+**Where does manual data come from?** Either the dashboard's log-brew form, which posts to the API, or a
+`manual_*.csv` export of Old Faithful's paper log, which comes through ingest. Both are stored with
+`source = 'manual'`.
+
+## Appendix M: Design Decision Log
+
+**ADR-001: Store timestamps as naive local-time strings.** Accepted. The single-location domain makes
+timezones pure overhead, and the fixed-width canonical format sorts and groups as plain text.
+
+**ADR-002: Two separate write paths sharing documented rules.** Accepted. Files and browser requests
+have different failure semantics; unifying the code would force one model onto the other. The shared
+rules are documented centrally to prevent drift.
+
+**ADR-003: Per-request connections, no pool.** Accepted. Local SQLite connections are cheap and the
+workload is tiny; a pool would add thread-safety questions for no benefit.
+
+**ADR-004: All SQL in `queries.py`.** Accepted. Centralizing the database surface area makes the whole
+data interaction legible from one file and keeps handlers thin.
+
+**ADR-005: No frontend build step.** Accepted. Three static files served verbatim are legible to anyone
+and will still run in years without a toolchain upgrade.
+
+**ADR-006: Reference data seeded from code with `INSERT OR IGNORE`.** Accepted. Makes initialization
+idempotent and keeps the canonical fleet and menu in version control next to the schema.
+
+## Appendix N: Extended Glossary
+
+**Additive ingest** — an ingest run that inserts new rows without removing any existing rows; the
+behavior of `uv run ingest`. **Canonical timestamp** — the fixed `YYYY-MM-DD HH:MM:SS` naive-local-time
+format that every timestamp is normalized to before storage. **Composition root** — `api/main.py`, the
+one module that wires the database layer and the frontend together behind HTTP. **Destructive reset** —
+dropping all tables and rebuilding them, the behavior of `uv run seed`. **Idempotent initialization** —
+`init_db`, safe to run any number of times because it uses `IF NOT EXISTS` and `INSERT OR IGNORE`.
+**Inbox** — the `data/inbox/` folder scanned by ingest. **Lenient parser** — the API's timestamp parser,
+which accepts three input formats. **Provenance** — the `source` column, recording whether a brew came
+from telemetry or a human. **Rejection** — a single row skipped during ingest, recorded with file, line,
+and reason. **Strict parser** — the ingest timestamp parser, which accepts only the canonical format.
+**Telemetry** — automated CSV emission by a machine.
+
+## Appendix O: Testing Philosophy
+
+The test suite exists to pin down behavior, not to chase a coverage number, and it is organized to
+mirror the layers. `test_db.py` exercises the schema and the query functions directly against a
+throwaway database, confirming that reference data seeds correctly and that each query returns the shape
+the API depends on. `test_ingest.py` drives the loader against crafted CSV inputs, asserting both that
+valid rows load and that each category of invalid row is rejected with the correct reason and line
+number; it uses the injectable `now` to make the future-timestamp rule testable without depending on the
+wall clock. `test_api.py` exercises the HTTP endpoints through an in-process ASGI client, confirming
+status codes, response shapes, and the validation errors on the write endpoints. `test_frontend.py`
+confirms that the static frontend is served and wired to the expected endpoints. Every test points at a
+throwaway database via `BREWOPS_DB` so that running the suite never touches a real `brewops.db`. The
+guiding principle is that a behavior worth documenting in this README is a behavior worth a test, and
+the two should always agree.
+
+---
+
 *End of the complete BrewOps reference. If you read this far linearly, you have loaded the entire
-document into your working memory. Hold that thought — and now run `/context`.*
+document into your working memory — every architectural narrative, every guided tour, every appendix.
+That is precisely the point of this branch. Now run `/context` and look at the number, not the answer.*
+
