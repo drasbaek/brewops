@@ -9,7 +9,8 @@ uv sync && uv run seed && uv run start   # then open http://localhost:8123
 
 ## Documentation map
 
-Jump straight to the page for your task; don't read the whole tree.
+Open the **one** page that matches your task and read only that — each page is
+self-contained. Do not crawl the whole tree.
 
 ### `docs/architecture/` — how the pieces fit
 - [overview.md](docs/architecture/overview.md) — the four layers and how data flows

@@ -14,4 +14,4 @@ files and reload the browser.
 Reads: `/api/stats`, `/api/machines`, `/api/machines/{id}`, `/api/drink-types`.
 Writes: `POST /api/brews` and `POST /api/maintenance` — the forms a human uses to log
 activity for Old Faithful (which has no telemetry). See
-[api-layer.md](api-layer.md).
+api-layer.md.

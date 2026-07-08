@@ -11,7 +11,7 @@ the row; the API returns HTTP 400.
 | Numeric fields parse (ingest brews) | `bad numeric fields duration_s=… temp_c=…` | — |
 | Duration > 0 (ingest brews) | `non-positive duration_s <value>` | — |
 | Maintenance type valid | `unknown maintenance type <value>` | `400 unknown maintenance type <value>` |
-| Timestamp parses & not future | see [timestamps.md](../data-model/timestamps.md) | see [timestamps.md](../data-model/timestamps.md) |
+| Timestamp parses & not future | see timestamps.md | see timestamps.md |
 | Unrecognized filename (ingest) | recorded in `skipped_files` | — |
 
 Maintenance types: `descale`, `refill`, `repair`, `error`. Manual brews are always stored

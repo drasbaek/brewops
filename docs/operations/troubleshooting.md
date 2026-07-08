@@ -7,13 +7,13 @@
 
 **Rows rejected on ingest.** Read the printed reasons — each names file, line, and cause.
 Usual suspects: non-canonical timestamps, unknown drink/machine, non-positive duration. See
-[validation-rules.md](../reference/validation-rules.md).
+validation-rules.md.
 
 **Timestamp rejected on ingest but accepted by the API.** Expected — ingest is strict,
-the API is lenient. See [timestamps.md](../data-model/timestamps.md).
+the API is lenient. See timestamps.md.
 
 **`timestamp is in the future`.** Both paths refuse future timestamps. Check the clock/date.
-See [timestamps.md](../data-model/timestamps.md).
+See timestamps.md.
 
 **Foreign key error.** You referenced a machine id or drink name that is not seeded.
 Re-seed or fix the reference data.

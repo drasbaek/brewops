@@ -11,8 +11,8 @@ Three console scripts, defined in `pyproject.toml`:
 `uv run ingest` takes one optional positional `path` (file or folder), default `data/inbox`.
 `uv run pytest` runs the tests (plain pytest, not a console script).
 
-See [seeding-and-ingest.md](../operations/seeding-and-ingest.md) for the difference between
-`seed` and `ingest`, and [testing.md](testing.md) for the suite.
+See seeding-and-ingest.md for the difference between
+`seed` and `ingest`, and testing.md for the suite.
 
 ## Exit codes
 

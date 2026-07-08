@@ -14,7 +14,7 @@ Four machines, seeded from `MACHINES` in `schema.py`. Every event references one
   `brews_intern_*.csv`.
 - **Old Faithful** — predates telemetry, emits nothing. `has_telemetry = 0`. Its brews are
   logged by hand via the UI or a `manual_old-faithful_log.csv` export — this is why the
-  manual write path exists. See [api-layer.md](../architecture/api-layer.md).
+  manual write path exists. See api-layer.md.
 - **Rocket** — fourth floor, newest/fastest, short brews; `brews_rocket_*.csv`.
 
 Add a machine by appending a row to `MACHINES` and re-seeding (`INSERT OR IGNORE` makes

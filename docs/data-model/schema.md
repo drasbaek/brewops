@@ -23,7 +23,7 @@ Four tables, defined in `src/brewops/db/schema.py`. Foreign keys are enforced.
 | id | INTEGER | primary key |
 | machine_id | INTEGER | not null, FK → machines(id) |
 | drink_type | TEXT | not null, FK → drink_types(name) |
-| timestamp | TEXT | not null, naive local time — see [timestamps.md](timestamps.md) |
+| timestamp | TEXT | not null, naive local time — see timestamps.md |
 | duration_s | REAL | nullable; seconds |
 | temp_c | REAL | nullable; Celsius |
 | source | TEXT | not null, CHECK IN ('csv','manual') |

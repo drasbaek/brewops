@@ -1,7 +1,7 @@
 # Seeding vs ingesting
 
 Two ways to get data in. Both go through the same pipeline
-([ingest-pipeline.md](../architecture/ingest-pipeline.md)); they differ in whether they
+(ingest-pipeline.md); they differ in whether they
 wipe first.
 
 ## `uv run seed` — destructive reset
@@ -23,4 +23,4 @@ Use it to return to a known-good state.
 - Does **not** drop anything — calls `init_db` (idempotent), then loads. Additive.
 - Prints the report. Exit `1` if the path is missing, else `0`.
 
-See [cli.md](../reference/cli.md) and [csv-formats.md](../reference/csv-formats.md).
+See cli.md and csv-formats.md.

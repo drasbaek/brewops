@@ -12,7 +12,7 @@ All under `/api`, all JSON. Errors are `{"detail": "..."}` with an HTTP status.
 ```
 `per_drink` is a LEFT JOIN from `drink_types`, so zero-count drinks appear. `per_day` is
 ordered ascending (grouped via `DATE(timestamp)` — see
-[timestamps.md](../data-model/timestamps.md)).
+timestamps.md).
 
 ## `GET /api/machines`
 ```json
@@ -45,4 +45,4 @@ Validates machine, drink type, timestamp. Stores `source = 'manual'`. Returns
 Body `MaintenanceIn`: `machine_id`, `type`, `timestamp`, `note?`, `error_code?`.
 Validates machine and type. Returns `{"id": <n>, "status": "logged"}`.
 
-Validation detail: [validation-rules.md](validation-rules.md).
+Validation detail: validation-rules.md.

@@ -20,19 +20,19 @@ CSV files (data/inbox)        human at the dashboard
 ## The four layers
 
 1. **Ingest** (`src/brewops/ingest/`) — reads CSVs, validates each row, inserts the good
-   ones, reports the rest. See [ingest-pipeline.md](ingest-pipeline.md).
+   ones, reports the rest. See ingest-pipeline.md.
 2. **Database** (`src/brewops/db/`) — schema, connection, and every SQL query. No SQL lives
-   anywhere else. See [database.md](database.md).
+   anywhere else. See database.md.
 3. **API** (`src/brewops/api/`) — FastAPI JSON endpoints + static frontend mount. See
-   [api-layer.md](api-layer.md).
+   api-layer.md.
 4. **Frontend** (`src/brewops/frontend/`) — static dashboard, no build step. See
-   [frontend.md](frontend.md).
+   frontend.md.
 
 ## Two write paths
 
 Telemetry machines emit CSVs (ingest path). Old Faithful emits nothing, so humans log its
 brews via the API (manual path). Both enforce the same
-[validation rules](../reference/validation-rules.md); they differ only in how they report
+validation rules; they differ only in how they report
 failure — a bad CSV row is skipped and reported, a bad API request returns HTTP 400.
 
 ## Startup

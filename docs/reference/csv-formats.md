@@ -2,7 +2,7 @@
 
 The ingest layer recognizes three file families by filename prefix. Header is line 1; data
 starts at line 2. Timestamps must be canonical `YYYY-MM-DD HH:MM:SS` (see
-[timestamps.md](../data-model/timestamps.md)).
+timestamps.md).
 
 ## `brews_*.csv` — telemetry brews
 Columns: `machine_id, drink, timestamp, duration_s, temp_c`
