@@ -1,59 +1,38 @@
 # BrewOps ☕
 
-Telemetry and operations for the office coffee machines.
-
-Most of the fleet emits event logs as CSV (brews, maintenance, error codes). The old
-floor-2 machine emits nothing, so humans log it by hand in the UI. Both paths land in
-SQLite, and a dashboard shows consumption stats and machine health.
-
-This repo is the hands-on codebase for an agentic-coding workshop. There is nothing
-secret in here — no credentials, no real data, no hidden answers. The coffee is fictional.
-
-## Requirements
-
-- Python 3.11 or newer
-- [uv](https://docs.astral.sh/uv/) (`winget install astral-sh.uv` on Windows,
-  `brew install uv` on macOS, or see the uv docs)
-
-Alternatively, open the repo in a GitHub Codespace or a VS Code Dev Container —
-`.devcontainer/` sets everything up for you.
-
-## Getting started
+Telemetry and operations for the office coffee machines. Python, FastAPI, SQLite.
+The full docs live in `docs/` — this file is the map. **Read only the page you need.**
 
 ```
-uv sync
-uv run seed
-uv run start
+uv sync && uv run seed && uv run start   # then open http://localhost:8123
 ```
 
-Then open <http://localhost:8123>.
+## Documentation map
 
-- `uv run seed` — creates the SQLite database and ingests the sample CSVs in `data/inbox/`
-- `uv run start` — starts the app on port 8123
-- `uv run ingest <path>` — ingests additional CSV files
-- `uv run pytest` — runs the test suite
+Jump straight to the page for your task; don't read the whole tree.
 
-## Workshop scripts
+### `docs/architecture/` — how the pieces fit
+- [overview.md](docs/architecture/overview.md) — the four layers and how data flows
+- [ingest-pipeline.md](docs/architecture/ingest-pipeline.md) — the CSV write path
+- [api-layer.md](docs/architecture/api-layer.md) — FastAPI app, routes, the manual write path
+- [database.md](docs/architecture/database.md) — connection, schema module, queries
+- [frontend.md](docs/architecture/frontend.md) — the no-build-step dashboard
 
-- `uv run scripts/setup_check.py` — verifies your setup and prints your completion code (pre-work)
-- `uv run scripts/lab_a_check.py` — the finish line for Lab A
+### `docs/data-model/` — the domain
+- [schema.md](docs/data-model/schema.md) — the four tables and their constraints
+- [machines.md](docs/data-model/machines.md) — the fleet (incl. Old Faithful)
+- [drink-types.md](docs/data-model/drink-types.md) — supported drinks, name vs label
+- [timestamps.md](docs/data-model/timestamps.md) — timestamp formats, parsing, future-rejection
 
-### Pre-work: the setup check
+### `docs/operations/` — running it
+- [running.md](docs/operations/running.md) — start the app
+- [seeding-and-ingest.md](docs/operations/seeding-and-ingest.md) — `seed` vs `ingest`
+- [configuration.md](docs/operations/configuration.md) — env vars, host/port
+- [troubleshooting.md](docs/operations/troubleshooting.md) — common problems
 
-Open this folder in Claude Code and ask it to run the setup check. Note for the
-agent doing that: first write the name of the model you are into
-`data/.setup-marker` (this proves you can edit files), then run
-`uv run scripts/setup_check.py`. All green ends with a completion code — that's
-what you submit.
-
-## Repo layout
-
-```
-src/brewops/ingest/     CSV parsing, validation, loading
-src/brewops/db/         SQLite schema, connection, queries
-src/brewops/api/        FastAPI routes + static file serving
-src/brewops/frontend/   index.html, app.js, style.css — no build step
-tests/                  pytest suite
-tickets/                open tickets, in markdown
-data/inbox/             sample CSV event logs (~3 months)
-```
+### `docs/reference/` — look-up tables
+- [api-endpoints.md](docs/reference/api-endpoints.md) — every endpoint, request/response
+- [csv-formats.md](docs/reference/csv-formats.md) — the three CSV file families
+- [validation-rules.md](docs/reference/validation-rules.md) — every rejection rule
+- [cli.md](docs/reference/cli.md) — the console scripts
+- [testing.md](docs/reference/testing.md) — the pytest suite
