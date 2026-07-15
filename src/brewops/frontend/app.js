@@ -1,5 +1,11 @@
 // BrewOps frontend — vanilla JS, no dependencies, no build step.
 
+// Ticket 006: the reception screen opens the dashboard as /?view=lobby and
+// gets stripped-down machine cards with no logging forms. The default view
+// keeps full detail — maintenance and errors are the ops team's
+// early-warning signal, so their screen must not lose them.
+const LOBBY_VIEW = new URLSearchParams(window.location.search).get("view") === "lobby";
+
 async function fetchJSON(url, options) {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -63,12 +69,15 @@ function renderMachineCards(healths) {
           .map((e) => `${e.error_code || "?"} (${e.timestamp.slice(0, 10)})`)
           .join(", ")}</p>`
       : "";
+    const internals = LOBBY_VIEW
+      ? ""
+      : `
+      <p>Last maintenance: ${maintenance}</p>
+      ${errors}`;
     card.innerHTML = `
       <h3>${m.name}</h3>
       <p class="badge">${m.has_telemetry ? "telemetry" : "manual log"}</p>
-      <p>${m.brew_count} brews · last ${m.last_brew ? m.last_brew.slice(0, 16) : "never"}</p>
-      <p>Last maintenance: ${maintenance}</p>
-      ${errors}`;
+      <p>${m.brew_count} brews · last ${m.last_brew ? m.last_brew.slice(0, 16) : "never"}</p>${internals}`;
     container.appendChild(card);
   }
 }
@@ -156,4 +165,8 @@ loadDashboard().catch((error) => {
   document.getElementById("total-brews").textContent = "!";
   console.error("Dashboard failed to load:", error);
 });
-setupForms().catch((error) => console.error("Form setup failed:", error));
+if (LOBBY_VIEW) {
+  for (const panel of document.querySelectorAll(".form-panel")) panel.hidden = true;
+} else {
+  setupForms().catch((error) => console.error("Form setup failed:", error));
+}
