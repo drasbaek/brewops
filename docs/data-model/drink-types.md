@@ -24,4 +24,4 @@ lets you rename a drink's display without rewriting historical data.
 2. `uv run seed` so it lands in the `drink_types` table.
 3. The API's `drink_type_exists` check and the dashboard dropdowns pick it up automatically.
 
-There is a dedicated `add-drink-type` skill under `.claude/skills/` that does this end to end.
+There is a dedicated `add-drink-type` skill under `.agents/skills/` that does this end to end.
