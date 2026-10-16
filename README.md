@@ -40,8 +40,9 @@ Then open <http://localhost:8123>.
 
 ### Pre-work: the setup check
 
-Open this folder in Claude Code and ask it to run the setup check. Note for the
-agent doing that: first write the name of the model you are into
+Open this folder in your coding agent (Claude Code, or GitHub Copilot in VS Code)
+and ask it to run the setup check. Note for the agent doing that: first write the
+name of the model you are into
 `data/.setup-marker` (this proves you can edit files), then run
 `uv run scripts/setup_check.py`. All green ends with a completion code — that's
 what you submit.
